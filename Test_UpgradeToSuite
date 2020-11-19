@@ -1,0 +1,95 @@
+@isTest
+public class Test_UpgradeToSuite {
+    
+    @testSetup
+    public static void testUpgradeSetup(){
+        Account testAccount = new Account(Name='Test Account',
+                                          Org_Id__c='Some Id');
+        insert testAccount;
+        
+        
+        List<Opportunity> testOpps = new List<Opportunity>();
+        
+        Opportunity testOppty1 = new Opportunity(Name='Test Opportunity 1',
+                                                 StageName='Defined',
+                                                 AccountId=testAccount.Id,
+                                                 Channel__c='Direct',
+                                                 Amount=1,
+                                                 CloseDate=System.today().addYears(-1),
+                                                 Type='Add-on');
+        testOpps.add(testOppty1);
+        
+        Opportunity testOppty2 = new Opportunity(Name='Test Opportunity 2',
+                                                 StageName='Defined',
+                                                 AccountId=testAccount.Id,
+                                                 Channel__c='Direct',
+                                                 CloseDate=System.today(),
+                                                 Type='Add-on');
+        testOpps.add(testOppty2);
+        
+        insert testOpps;
+        
+        
+        List<Product2> prods = new List<Product2>();
+        Product2 testProd = new Product2(Name='GoGuardian Admin',
+                                         ProductCode='GG-ADM');
+        prods.add(testProd);
+        
+        Product2 testSuite = new Product2(Name='GoGuardian Suite',
+                                          ProductCode='GG-STE');
+        prods.add(testSuite);
+        insert prods;
+        
+        SBQQ__DiscountSchedule__c discSchedule= new SBQQ__DiscountSchedule__c(Name='Negative Quantity Discount Schedule');
+        insert discSchedule;
+        
+        SBQQ__ProductOption__c testOption = new SBQQ__ProductOption__c(SBQQ__ConfiguredSKU__c=testSuite.Id,
+                                                                       SBQQ__OptionalSKU__c=testProd.Id,
+                                                                       SBQQ__Number__c=1,
+                                                                       SBQQ__Selected__c=True);
+        
+        insert testOption;
+        
+        SBQQ__Quote__c testQuote = new SBQQ__Quote__c(SBQQ__Opportunity2__c=testOppty1.Id,
+                                                      SBQQ__Account__c=testAccount.Id,
+                                                      Price_List__c='Direct',
+                                                      SBQQ__Primary__c=True,
+                                                      SBQQ__Status__c='Draft');
+        SBQQ.TriggerControl.disable();
+        
+        insert testQuote;
+        
+        SBQQ__QuoteLine__c testQuoteLine = new SBQQ__QuoteLine__c(SBQQ__Quote__c=testQuote.Id,
+                                                                  SBQQ__Product__c=testProd.Id,
+                                                                  SBQQ__Quantity__c=1,
+                                                                  SBQQ__StartDate__c=System.today(),
+                                                                  SBQQ__EndDate__c=System.today().addYears(1)-1,
+                                                                  Deal_Type__c='New');
+        insert testQuoteLine;
+        
+        
+        testQuote.SBQQ__Status__c = 'Accepted';
+        
+        update testQuote;
+        
+        SBQQ.TriggerControl.enable();
+
+    }
+    
+    public static testMethod void testUpgrade(){
+        
+        test.startTest();
+        Opportunity opp = [SELECT Id FROM Opportunity WHERE Name = 'Test Opportunity 2' LIMIT 1];
+        
+        Product2 suite = [SELECT Id FROM Product2 WHERE Name = 'GoGuardian Suite'];
+        
+        List<InvocableUpgradeToSuite.UpgradeRequest> reqList = new List<InvocableUpgradeToSuite.UpgradeRequest>();
+        InvocableUpgradeToSuite.UpgradeRequest req = new InvocableUpgradeToSuite.UpgradeRequest();
+        req.opptyId = opp.Id;
+        req.priceList = 'Direct';
+        req.suiteId = suite.Id;
+        reqList.add(req);
+        InvocableUpgradeToSuite.createUpgradeQuote(reqList);
+        Test.stopTest();
+    }
+}
