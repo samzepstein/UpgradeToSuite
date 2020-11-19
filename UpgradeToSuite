@@ -1,0 +1,200 @@
+public class UpgradeToSuite implements Database.Batchable<sObject>, Database.Stateful{
+    
+    public Id opptyId;
+    public Id suiteProductId;
+    public String priceList;
+    public Id quoteId;
+    public String errStr;
+    public SBQQ__DiscountSchedule__c negDiscSchedule;
+    public List<SBQQ__QuoteLine__C> bundleQuoteLines = new List<SBQQ__QuoteLine__c>();
+    public Map<Id,Id> productOptionMap = new Map<Id,Id>();
+    
+    public UpgradeToSuite(Id opptyId, Id suiteProductId, String priceList){
+        this.opptyId = opptyId;
+        this.suiteProductId = suiteProductId;
+        this.priceList = priceList;
+        this.negDiscSchedule = [SELECT Id FROM SBQQ__DiscountSchedule__c WHERE Name = 'Negative Quantity Discount Schedule' LIMIT 1];
+        this.errStr = '';
+        List<SBQQ__ProductOption__c> productOptions = [SELECT ID, SBQQ__OptionalSKU__c FROM SBQQ__ProductOption__c WHERE SBQQ__ConfiguredSKU__c = :suiteProductId AND SBQQ__Quantity__c = -1];
+        for(SBQQ__ProductOption__c po : productOptions){
+            this.productOptionMap.put(po.SBQQ__OptionalSKU__c,po.ID);
+        }
+    }
+    
+    public List<SBQQ__QuoteLine__c> start(Database.BatchableContext BC){
+        // Get quotelines from accepted quotes on purchased opps where opportunity is not returned or cm and end date is in the future.
+        // Quotelines cannot be a part of a Suite package.
+        Opportunity oppty = [SELECT Id, Account.Name, Admin_Contact__c, AccountId, QuotePrimaryPartner__c, PrimaryDistributor__c, Pricebook2Id, Partner_Rep__c,
+                             Account.BillingStreet, Account.BillingCity, Account.BillingState, Account.BillingPostalCode, Account.BillingCountry
+                             FROM Opportunity WHERE Id = :opptyId LIMIT 1];
+        
+        try{
+            SBQQ__Quote__c upgradeQuote = new SBQQ__Quote__c(SBQQ__Opportunity2__c = opptyId,
+                                                             SBQQ__Account__c = oppty.AccountId,
+                                                             Price_List__c = priceList,
+                                                             Suite_Upgrade__c = True,
+                                                             SBQQ__Primary__c = True,
+                                                             SBQQ__Partner__c = oppty.QuotePrimaryPartner__c,
+                                                             SBQQ__Distributor__c = oppty.PrimaryDistributor__c,
+                                                             Partner_Rep__c = oppty.Partner_Rep__c,
+                                                             SBQQ__Pricebook__c = oppty.Pricebook2Id,
+                                                             End_Date_Validation_Override__c = True,
+                                                             SBQQ__PrimaryContact__c = oppty.Admin_Contact__c,
+                                                             SBQQ__ShippingName__c = oppty.Account.Name,
+                                                             SBQQ__ShippingStreet__c = oppty.Account.BillingStreet,
+                                                             SBQQ__ShippingCity__c = oppty.Account.BillingCity,
+                                                             SBQQ__ShippingState__c = oppty.Account.BillingState,
+                                                             SBQQ__ShippingPostalCode__c = oppty.Account.BillingPostalCode, 
+                                                             SBQQ__ShippingCountry__c = oppty.Account.BillingCountry);
+            
+                Account reseller = oppty.QuotePrimaryPartner__c != Null ? [SELECT Name, BillingStreet, BillingCity, BillingState, BillingPostalCode, BillingCountry 
+                                                         FROM Account 
+                                                         WHERE Id = :oppty.QuotePrimaryPartner__c LIMIT 1] : new Account();
+            
+                upgradeQuote.SBQQ__BillingName__c = oppty.QuotePrimaryPartner__c == Null ? oppty.Account.Name : reseller.Name;
+                upgradeQuote.SBQQ__BillingStreet__c = oppty.QuotePrimaryPartner__c == Null ? oppty.Account.BillingStreet : reseller.BillingStreet;
+                upgradeQuote.SBQQ__BillingCity__c = oppty.QuotePrimaryPartner__c == Null ? oppty.Account.BillingCity : reseller.BillingCity;
+                upgradeQuote.SBQQ__BillingState__c = oppty.QuotePrimaryPartner__c == Null ? oppty.Account.BillingState : reseller.BillingState;
+                upgradeQuote.SBQQ__BillingPostalCode__c = oppty.QuotePrimaryPartner__c == Null ? oppty.Account.BillingPostalCode : reseller.BillingPostalCode;
+                upgradeQuote.SBQQ__BillingCountry__c = oppty.QuotePrimaryPartner__c == Null ? oppty.Account.BillingCountry : reseller.BillingCountry; 
+            
+            SBQQ.TriggerControl.disable();
+            insert upgradeQuote;
+            SBQQ.TriggerControl.enable();
+            
+            this.quoteId = upgradeQuote.Id;
+            
+        }
+        
+        catch(Exception err){
+            errStr += '\nError Message: '+err.getMessage();
+            errStr += '\nStack Trace: '+err.getStackTraceString();
+            Error_Log_Handler.errorHandler('UpgradeToSuite - Start',errStr);
+        }
+        
+        
+        List<SBQQ__QuoteLine__c> creditLines = [SELECT Id, Upgrade_Discounts__c, SBQQ__Quantity__c, Line_Escalation__c, SBQQ__Product__c, SBQQ__Product__r.ProductCode, SBQQ__StartDate__c, 
+                                                SBQQ__EndDate__c, SBQQ__OptionDiscount__c, DefaultAdditionalDiscount__c, Sales_Discount__c
+                                                FROM SBQQ__QuoteLine__c
+                                                WHERE SBQQ__EndDate__c > :System.today() 
+                                                AND (NOT SBQQ__RequiredBy__r.SBQQ__Product__r.Name LIKE '%Suite%')
+                                                AND SBQQ__ComponentTotal__c = Null
+                                                AND SBQQ__Quote__r.SBQQ__Opportunity2__r.StageName = 'Purchase'
+                                                AND SBQQ__Quote__r.SBQQ__Status__c = 'Accepted'
+                                                AND SBQQ__Quote__r.SBQQ__Opportunity2__r.Returned_or_CM__c = False
+                                                AND SBQQ__Quote__r.SBQQ__Account__c = :oppty.AccountId];        
+        return creditLines;
+        
+    }
+    
+    public void execute(Database.BatchableContext BC, List<SBQQ__QuoteLine__c> creditLines){
+        try{
+            List<SBQQ__QuoteLine__c> upgradeQuoteLines = new List<SBQQ__QuoteLine__c>();
+            List<SBQQ__QuoteLine__c> creditQuoteLines = new List<SBQQ__QuoteLine__c>();
+            
+            
+            // Start Date, End Date, Product Id, Quantity
+            Map<Date,Map<Date,Map<Id,Decimal>>> suiteQuantityMap = new Map<Date,Map<Date,Map<Id,Decimal>>>();
+            
+            for(SBQQ__QuoteLine__c creditLine : creditLines){
+                
+                Date startDate = creditLine.SBQQ__StartDate__c < System.today() ? System.today() : creditLine.SBQQ__StartDate__c;
+                Date endDate = creditLine.SBQQ__EndDate__c;
+                Id productId = creditLine.SBQQ__Product__c;
+                String productCode = creditLine.SBQQ__Product__r.ProductCode;
+                
+                Map<Date,Map<Id,Decimal>> endDateQuantityMap = suiteQuantityMap.containsKey(startDate) ? suiteQuantityMap.get(startDate) : new Map<Date,Map<Id,Decimal>>();
+                Map<Id,Decimal> productQuantityMap = endDateQuantityMap.containsKey(endDate) ? endDateQuantityMap.get(endDate) : new Map<Id,Decimal>();
+                Decimal currQuantity = productQuantityMap.containsKey(productId) ? productQuantityMap.get(productId) : 0;
+                if(productCode == 'GG-DNS' || productCode == 'GG-DEF'){
+                    currQuantity = 1;
+                }
+                else{
+                    currQuantity += creditLine.SBQQ__Quantity__c;
+                }
+                productQuantityMap.put(productId,currQuantity);
+                endDateQuantityMap.put(endDate,productQuantityMap);
+                suiteQuantityMap.put(startDate,endDateQuantityMap);
+                
+                SBQQ__QuoteLine__c cloneCreditLine = creditLine.clone(False,True,False,False);
+                cloneCreditLine.SBQQ__Quantity__c = -1 * creditLine.SBQQ__Quantity__c;
+                cloneCreditLine.Deal_Type__c = 'Add-on';
+                cloneCreditLine.SBQQ__Quote__c = quoteId;
+                cloneCreditLine.SBQQ__StartDate__c = startDate;
+                cloneCreditLine.SBQQ__RequiredBy__c = Null;
+                cloneCreditLine.Original_Quote_Line__c = creditLine.Id;
+                cloneCreditLine.Suite_Upgrade__c = True;
+                cloneCreditLine.SBQQ__DiscountSchedule__c = negDiscSchedule.Id;
+                
+                cloneCreditLine.Original_Discount__c = creditLine.Upgrade_Discounts__c;
+                creditQuoteLines.add(cloneCreditLine);
+            }
+            
+            if(!suiteQuantityMap.isEmpty()){
+                
+                for(Date startDate : suiteQuantityMap.keySet()){
+                    
+                    Map<Date,Map<Id,Decimal>> endDateQuantityMap = suiteQuantityMap.get(startDate);
+                    
+                    for(Date endDate : endDateQuantityMap.keySet()){
+                        
+                        Map<Id,Decimal> productQuantityMap = endDateQuantityMap.get(endDate);
+                        List<Decimal> quantities = productQuantityMap.values();
+                        quantities.sort();
+                        SBQQ__QuoteLine__c upgradeQuoteLine = new SBQQ__QuoteLine__c(SBQQ__Product__c = suiteProductId, 
+                                                                                     SBQQ__StartDate__c = startDate,
+                                                                                     SBQQ__EndDate__c = endDate,
+                                                                                     SBQQ__Quote__c = quoteId,
+                                                                                     Deal_Type__c = 'Add-on',
+                                                                                     Suite_Upgrade__c = True,
+                                                                                     SBQQ__Quantity__c = quantities.get(quantities.size()-1));
+                        upgradeQuoteLines.add(upgradeQuoteLine);
+                    }
+                }
+            }
+            
+            SBQQ.TriggerControl.disable();
+            
+            insert upgradeQuoteLines;
+            insert creditQuoteLines;
+            
+            SBQQ.TriggerControl.enable();
+            
+            bundleQuoteLines.addAll(upgradeQuoteLines);
+            
+			Map<Date,Map<Date,Id>> suiteQuoteLineMap = new Map<Date,Map<Date,Id>>();   
+                
+            for(SBQQ__QuoteLine__c suiteLine : upgradeQuoteLines){
+                Date startDate = suiteLine.SBQQ__StartDate__c;                
+                Map<Date,Id> endDateSuiteMap = suiteQuoteLineMap.containsKey(startDate) ? suiteQuoteLineMap.get(startDate) : new Map<Date,Id>();
+                endDateSuiteMap.put(suiteLine.SBQQ__EndDate__c, suiteLine.Id);
+                suiteQuoteLineMap.put(startDate,endDateSuiteMap);
+            }
+            for(SBQQ__QuoteLine__c creditLine : creditQuoteLines){
+                Id requiredById = (suiteQuoteLineMap.get(creditLine.SBQQ__StartDate__c)).get(creditLine.SBQQ__EndDate__c);
+                creditLine.SBQQ__RequiredBy__c = requiredById;
+                creditLine.SBQQ__ProductOption__c = productOptionMap.get(creditLine.SBQQ__Product__c);
+            }
+            
+            SBQQ.TriggerControl.disable();
+            
+            update creditQuoteLines;
+            
+            SBQQ.TriggerControl.enable();
+        }
+        
+        catch(Exception err){
+            errStr += '\nError Message: '+err.getMessage();
+            errStr += '\nStack Trace: '+err.getStackTraceString();
+            Error_Log_Handler.errorHandler('UpgradeToSuite - Execute', errStr);
+        }
+    }
+    
+    public void finish(Database.BatchableContext BC){
+        Database.executeBatch(new BatchRenewalQuoteLineBundles(bundleQuoteLines,1,new Set<Id>{quoteId}));
+        
+        if(errStr != ''){
+            Error_Log_Handler.errorHandler('UpgradeToSuite', errStr);
+        }
+    }
+}
