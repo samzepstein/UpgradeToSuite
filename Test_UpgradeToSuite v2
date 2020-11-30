@@ -30,7 +30,6 @@ public class Test_UpgradeToSuite {
         insert testOpps;
         
         
-        
         List<Product2> prods = new List<Product2>();
         Product2 testProd = new Product2(Name='GoGuardian Admin',
                                          ProductCode='GG-ADM');
@@ -51,25 +50,21 @@ public class Test_UpgradeToSuite {
         
         insert testOption;
         
-        SBQQ.TriggerControl.disable();
-        
         SBQQ__Quote__c testQuote = new SBQQ__Quote__c(SBQQ__Opportunity2__c=testOppty1.Id,
                                                       SBQQ__Account__c=testAccount.Id,
                                                       Price_List__c='Direct',
                                                       SBQQ__Primary__c=True,
                                                       SBQQ__Status__c='Draft');
+        SBQQ.TriggerControl.disable();
+        
         
         
         insert testQuote;
         
         
         
+        
         SBQQ.TriggerControl.enable();
-        
-        
-        //testQuote.SBQQ__Status__c = 'Accepted';
-        
-        //update testQuote;
         
         
         
@@ -77,13 +72,21 @@ public class Test_UpgradeToSuite {
     
     public static testMethod void testUpgrade(){
         
-        test.startTest();
+        Test.startTest();
         
-        Product2 testProd = [SELECT ID, Name FROM Product2 WHERE Name='GoGuardian Admin' LIMIT 1];
+        SBQQ.TriggerControl.disable();
         
-        SBQQ__Quote__c quote = [SELECT ID, SBQQ__Status__c FROM SBQQ__Quote__c WHERE SBQQ__Status__c ='Draft' LIMIT 1];
         
-        SBQQ__QuoteLine__c testQuoteLine = new SBQQ__QuoteLine__c(SBQQ__Quote__c=quote.Id,
+        SBQQ__Quote__c testQuote = [SELECT ID, SBQQ__Status__c FROM SBQQ__Quote__c WHERE SBQQ__Status__c='Draft' LIMIT 1];
+        
+        testQuote.SBQQ__Status__c = 'Accepted';
+        
+        update testQuote;
+        
+        Product2 testProd = [SELECT ID, Name FROM Product2 WHERE Name='GoGuardian Admin'];
+        
+        
+        SBQQ__QuoteLine__c testQuoteLine = new SBQQ__QuoteLine__c(SBQQ__Quote__c=testQuote.Id,
                                                                   SBQQ__Product__c=testProd.Id,
                                                                   SBQQ__Quantity__c=1,
                                                                   SBQQ__StartDate__c=System.today(),
@@ -91,12 +94,17 @@ public class Test_UpgradeToSuite {
                                                                   Deal_Type__c='New');
         insert testQuoteLine;
         
-        quote.SBQQ__Status__c = 'Accepted';
         
-        update quote;
-        
+        SBQQ.TriggerControl.enable();
         
         Opportunity opp = [SELECT Id FROM Opportunity WHERE Name = 'Test Opportunity 2' LIMIT 1];
+        
+        
+        Opportunity testOppty1 = [SELECT Id FROM Opportunity WHERE Name = 'Test Opportunity 1' LIMIT 1];
+        
+        testOppty1.StageName = 'Purchase';
+        
+        update testOppty1;
         
         Product2 suite = [SELECT Id FROM Product2 WHERE Name = 'GoGuardian Suite'];
         
@@ -106,6 +114,7 @@ public class Test_UpgradeToSuite {
         req.priceList = 'Direct';
         req.suiteId = suite.Id;
         reqList.add(req);
+        
         InvocableUpgradeToSuite.createUpgradeQuote(reqList);
         Test.stopTest();
     }
